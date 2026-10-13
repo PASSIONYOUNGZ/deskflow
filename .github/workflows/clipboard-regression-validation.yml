@@ -1,0 +1,57 @@
+# SPDX-FileCopyrightText: (C) 2026 PASSIONYOUNGZ <133885683+PASSIONYOUNGZ@users.noreply.github.com>
+# SPDX-License-Identifier: MIT
+name: Windows clipboard regression validation
+on:
+  push:
+    branches: [codex/validate-windows-clipboard]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  clipboard:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: TheMrMilchmann/setup-msvc-dev@v4
+        with:
+          arch: amd64
+          spectre: true
+      - name: Install dependencies
+        id: deps
+        uses: ./.github/actions/install-dependencies
+        with:
+          qt-version: '6.12'
+          vcpkg-triplet: x64-windows-release
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DSKIP_BUILD_TESTS=ON -DBUILD_INSTALLER=OFF -DCMAKE_COMPILE_WARNING_AS_ERROR=ON ${{ steps.deps.outputs.vcpkg-cmake-config }}
+      - name: Build patched core and clipboard tests
+        run: cmake --build build --config Release --parallel 4 --target deskflow-core MSWindowsClipboardTests
+      - name: Run clipboard suite
+        run: ctest --test-dir build/src/unittests -R '^MSWindowsClipboardTests$' --output-on-failure --verbose --output-junit '${{ github.workspace }}/patched-tests.xml'
+      - name: Confirm regression fails on upstream converter
+        shell: pwsh
+        run: |
+          $source = 'src/lib/platform/MSWindowsClipboardBitmapConverter.cpp'
+          git show '3aec96d57eda8851e3ca534400962cd9d71357ac:src/lib/platform/MSWindowsClipboardBitmapConverter.cpp' | Set-Content -LiteralPath $source -Encoding utf8
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot load original converter' }
+          cmake --build build --config Release --parallel 4 --target MSWindowsClipboardTests
+          if ($LASTEXITCODE -ne 0) { throw 'Original converter did not compile' }
+          & ./build/src/unittests/platform/MSWindowsClipboardTests.exe normalisesMacSrgbV5Bitmap -o upstream-regression.txt,txt
+          $regressionExit = $LASTEXITCODE
+          $report = Get-Content upstream-regression.txt -Raw
+          Write-Output $report
+          if ($regressionExit -eq 0 -or $report -notmatch 'FAIL!.*normalisesMacSrgbV5Bitmap\(top-down\)' -or $report -notmatch 'FAIL!.*normalisesMacSrgbV5Bitmap\(bottom-up\)') { throw 'Expected both V5 regression rows to fail on upstream' }
+          git restore --source=HEAD -- $source
+          exit 0
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-clipboard-test-results
+          path: |
+            patched-tests.xml
+            upstream-regression.txt
+            build/Testing/Temporary/LastTest.log
