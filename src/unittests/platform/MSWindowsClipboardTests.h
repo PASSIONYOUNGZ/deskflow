@@ -1,5 +1,6 @@
 /*
  * Deskflow -- mouse and keyboard sharing utility
+ * SPDX-FileCopyrightText: (C) 2026 PASSIONYOUNGZ <133885683+PASSIONYOUNGZ@users.noreply.github.com>
  * SPDX-FileCopyrightText: (C) 2025 Chris Rizzitello <sithlord48@gmail.com>
  * SPDX-License-Identifier: GPL-2.0-only WITH LicenseRef-OpenSSL-Exception
  */
@@ -30,6 +31,10 @@ private Q_SLOTS:
   void isOwnedByDeskflow();
   void normalisesMalformedMacBitmap();
   void preservesHealthyMacV5Bitmap();
+  void normalisesMacSrgbV5Bitmap_data();
+  void normalisesMacSrgbV5Bitmap();
+  void preservesUnsupportedV5Bitmap_data();
+  void preservesUnsupportedV5Bitmap();
 
 private:
   Log m_log;
