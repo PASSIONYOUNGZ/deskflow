@@ -1,0 +1,108 @@
+# SPDX-FileCopyrightText: (C) 2026 Deskflow Developers
+# SPDX-License-Identifier: MIT
+name: PR 10265 review validation
+on:
+  push:
+    branches: [codex/review-10265-validation]
+permissions:
+  contents: read
+jobs:
+  windows:
+    name: windows-${{ matrix.source }}
+    runs-on: windows-2022
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        source: [review, nick-10201]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Use Nick's PR with the same legacy bitmap regression tests
+        if: matrix.source == 'nick-10201'
+        shell: pwsh
+        run: |
+          $testFiles = @('MSWindowsClipboardTests.cpp', 'MSWindowsClipboardTests.h')
+          foreach ($file in $testFiles) { Copy-Item "src/unittests/platform/$file" "$env:RUNNER_TEMP/$file" }
+          git fetch https://github.com/deskflow/deskflow.git b7ce2c45d6622232c2a0659a1596e01b55e9755c
+          if ($LASTEXITCODE -ne 0) { throw 'Fetch failed' }
+          git checkout --detach b7ce2c45d6622232c2a0659a1596e01b55e9755c
+          if ($LASTEXITCODE -ne 0) { throw 'Checkout failed' }
+          foreach ($file in $testFiles) { Copy-Item "$env:RUNNER_TEMP/$file" "src/unittests/platform/$file" }
+      - uses: TheMrMilchmann/setup-msvc-dev@v4
+        with:
+          arch: amd64
+          spectre: true
+      - name: Install dependencies
+        id: deps
+        uses: ./.github/actions/install-dependencies
+        with:
+          qt-version: '6.12'
+          vcpkg-triplet: x64-windows-release
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DSKIP_BUILD_TESTS=ON -DBUILD_INSTALLER=OFF -DCMAKE_COMPILE_WARNING_AS_ERROR=ON ${{ steps.deps.outputs.vcpkg-cmake-config }}
+      - name: Build application and clipboard tests
+        run: cmake --build build --config Release --parallel 4 --target deskflow deskflow-core deskflow-daemon MSWindowsClipboardTests
+      - name: Test revised PR
+        if: matrix.source == 'review'
+        run: ctest --test-dir build/src/unittests -R '^MSWindowsClipboardTests$' --output-on-failure --verbose --output-junit '${{ github.workspace }}/clipboard-tests.xml'
+      - name: Check legacy V5 path on Nick's PR
+        if: matrix.source == 'nick-10201'
+        shell: pwsh
+        run: |
+          & ./build/src/unittests/platform/MSWindowsClipboardTests.exe normalisesMacSrgbV5Bitmap -o nick-legacy-regression.txt,txt
+          $result = $LASTEXITCODE
+          $report = Get-Content nick-legacy-regression.txt -Raw
+          Write-Output $report
+          if ($result -eq 0 -or $report -notmatch 'FAIL!.*normalisesMacSrgbV5Bitmap\(top-down\)' -or $report -notmatch 'FAIL!.*normalisesMacSrgbV5Bitmap\(bottom-up\)') { throw 'Expected both legacy V5 regression rows to fail on Nick PR; inspect the result' }
+          exit 0
+      - name: Stage portable application
+        run: cmake --install build --config Release --prefix '${{ github.workspace }}/portable'
+      - name: Record revision
+        shell: pwsh
+        run: |
+          git rev-parse HEAD | Set-Content portable/source-commit.txt
+          Get-FileHash portable/deskflow-core.exe -Algorithm SHA256 | Format-List | Out-File portable/core-sha256.txt
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-${{ matrix.source }}-portable
+          path: portable/
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: windows-${{ matrix.source }}-test-results
+          path: |
+            clipboard-tests.xml
+            nick-legacy-regression.txt
+            build/src/unittests/Testing/Temporary/LastTest.log
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install dependencies
+        uses: ./.github/actions/install-dependencies
+        with:
+          qt-version: '6.12'
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF -DBUILD_INSTALLER=OFF -DCMAKE_COMPILE_WARNING_AS_ERROR=ON -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=14
+      - name: Compile macOS application
+        run: cmake --build build --config Release --parallel 4
+  linux:
+    runs-on: ubuntu-latest
+    container: debian:stable-slim
+    timeout-minutes: 30
+    steps:
+      - name: Install Git
+        run: apt-get update -qq && apt-get install -y -qq git
+      - uses: actions/checkout@v6
+      - name: Install dependencies
+        uses: ./.github/actions/install-dependencies
+        with:
+          like: debian
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF -DBUILD_INSTALLER=OFF -DCMAKE_COMPILE_WARNING_AS_ERROR=ON
+      - name: Compile Linux application
+        run: cmake --build build --config Release --parallel 4
